@@ -42,7 +42,31 @@ func Float32(f float32) *float32 { return &f }
 // Float64 provides a helper function to return a pointer to a float64
 func Float64(f float64) *float64 { return &f }
 
-// SDK - The Speakeasy API allows teams to manage common operations with their APIs
+type sdkConfiguration struct {
+	DefaultClient     HTTPClient
+	SecurityClient    HTTPClient
+	Security          *shared.Security
+	ServerURL         string
+	Server            string
+	Language          string
+	OpenAPIDocVersion string
+	SDKVersion        string
+	GenVersion        string
+}
+
+func (c *sdkConfiguration) GetServerDetails() (string, map[string]string) {
+	if c.ServerURL != "" {
+		return c.ServerURL, nil
+	}
+
+	if c.Server == "" {
+		c.Server = "prod"
+	}
+
+	return ServerList[c.Server], nil
+}
+
+// SDK - Speakeasy API: The Speakeasy API allows teams to manage common operations with their APIs
 // https://docs.speakeasyapi.dev - The Speakeasy Platform Documentation
 type SDK struct {
 	// APIEndpoints - REST APIs for managing ApiEndpoint entities
@@ -58,14 +82,7 @@ type SDK struct {
 	// Schemas - REST APIs for managing Schema entities
 	Schemas *schemas
 
-	// Non-idiomatic field names below are to namespace fields from the fields names above to avoid name conflicts
-	_defaultClient  HTTPClient
-	_securityClient HTTPClient
-	_security       *shared.Security
-	_serverURL      string
-	_language       string
-	_sdkVersion     string
-	_genVersion     string
+	sdkConfiguration sdkConfiguration
 }
 
 type SDKOption func(*SDK)
@@ -73,7 +90,7 @@ type SDKOption func(*SDK)
 // WithServerURL allows the overriding of the default server URL
 func WithServerURL(serverURL string) SDKOption {
 	return func(sdk *SDK) {
-		sdk._serverURL = serverURL
+		sdk.sdkConfiguration.ServerURL = serverURL
 	}
 }
 
@@ -84,128 +101,73 @@ func WithTemplatedServerURL(serverURL string, params map[string]string) SDKOptio
 			serverURL = utils.ReplaceParameters(serverURL, params)
 		}
 
-		sdk._serverURL = serverURL
+		sdk.sdkConfiguration.ServerURL = serverURL
 	}
 }
 
 // WithServer allows the overriding of the default server by name
 func WithServer(server string) SDKOption {
 	return func(sdk *SDK) {
-		serverURL, ok := ServerList[server]
+		_, ok := ServerList[server]
 		if !ok {
 			panic(fmt.Errorf("server %s not found", server))
 		}
 
-		WithServerURL(serverURL)(sdk)
-	}
-}
-
-// WithTemplatedServer allows the overriding of the default server by name templated with the provided parameters
-func WithTemplatedServer(server string, params map[string]string) SDKOption {
-	return func(sdk *SDK) {
-		serverURL, ok := ServerList[server]
-		if !ok {
-			panic(fmt.Errorf("server %s not found", server))
-		}
-
-		WithTemplatedServerURL(serverURL, params)(sdk)
+		sdk.sdkConfiguration.Server = server
 	}
 }
 
 // WithClient allows the overriding of the default HTTP client used by the SDK
 func WithClient(client HTTPClient) SDKOption {
 	return func(sdk *SDK) {
-		sdk._defaultClient = client
+		sdk.sdkConfiguration.DefaultClient = client
 	}
 }
 
 // WithSecurity configures the SDK to use the provided security details
 func WithSecurity(security shared.Security) SDKOption {
 	return func(sdk *SDK) {
-		sdk._security = &security
+		sdk.sdkConfiguration.Security = &security
 	}
 }
 
 // New creates a new instance of the SDK with the provided options
 func New(opts ...SDKOption) *SDK {
 	sdk := &SDK{
-		_language:   "go",
-		_sdkVersion: "1.4.0",
-		_genVersion: "2.34.2",
+		sdkConfiguration: sdkConfiguration{
+			Language:          "go",
+			OpenAPIDocVersion: "0.1.0",
+			SDKVersion:        "1.5.0",
+			GenVersion:        "2.37.0",
+		},
 	}
 	for _, opt := range opts {
 		opt(sdk)
 	}
 
 	// Use WithClient to override the default client if you would like to customize the timeout
-	if sdk._defaultClient == nil {
-		sdk._defaultClient = &http.Client{Timeout: 60 * time.Second}
+	if sdk.sdkConfiguration.DefaultClient == nil {
+		sdk.sdkConfiguration.DefaultClient = &http.Client{Timeout: 60 * time.Second}
 	}
-	if sdk._securityClient == nil {
-		if sdk._security != nil {
-			sdk._securityClient = utils.ConfigureSecurityClient(sdk._defaultClient, sdk._security)
+	if sdk.sdkConfiguration.SecurityClient == nil {
+		if sdk.sdkConfiguration.Security != nil {
+			sdk.sdkConfiguration.SecurityClient = utils.ConfigureSecurityClient(sdk.sdkConfiguration.DefaultClient, sdk.sdkConfiguration.Security)
 		} else {
-			sdk._securityClient = sdk._defaultClient
+			sdk.sdkConfiguration.SecurityClient = sdk.sdkConfiguration.DefaultClient
 		}
 	}
 
-	if sdk._serverURL == "" {
-		sdk._serverURL = ServerList[ServerProd]
-	}
+	sdk.APIEndpoints = newAPIEndpoints(sdk.sdkConfiguration)
 
-	sdk.APIEndpoints = newAPIEndpoints(
-		sdk._defaultClient,
-		sdk._securityClient,
-		sdk._serverURL,
-		sdk._language,
-		sdk._sdkVersion,
-		sdk._genVersion,
-	)
+	sdk.Apis = newApis(sdk.sdkConfiguration)
 
-	sdk.Apis = newApis(
-		sdk._defaultClient,
-		sdk._securityClient,
-		sdk._serverURL,
-		sdk._language,
-		sdk._sdkVersion,
-		sdk._genVersion,
-	)
+	sdk.Embeds = newEmbeds(sdk.sdkConfiguration)
 
-	sdk.Embeds = newEmbeds(
-		sdk._defaultClient,
-		sdk._securityClient,
-		sdk._serverURL,
-		sdk._language,
-		sdk._sdkVersion,
-		sdk._genVersion,
-	)
+	sdk.Metadata = newMetadata(sdk.sdkConfiguration)
 
-	sdk.Metadata = newMetadata(
-		sdk._defaultClient,
-		sdk._securityClient,
-		sdk._serverURL,
-		sdk._language,
-		sdk._sdkVersion,
-		sdk._genVersion,
-	)
+	sdk.Requests = newRequests(sdk.sdkConfiguration)
 
-	sdk.Requests = newRequests(
-		sdk._defaultClient,
-		sdk._securityClient,
-		sdk._serverURL,
-		sdk._language,
-		sdk._sdkVersion,
-		sdk._genVersion,
-	)
-
-	sdk.Schemas = newSchemas(
-		sdk._defaultClient,
-		sdk._securityClient,
-		sdk._serverURL,
-		sdk._language,
-		sdk._sdkVersion,
-		sdk._genVersion,
-	)
+	sdk.Schemas = newSchemas(sdk.sdkConfiguration)
 
 	return sdk
 }
